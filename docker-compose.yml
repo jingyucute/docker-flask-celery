@@ -1,0 +1,100 @@
+version: "3.9"
+
+# redis mongo flask-app celery flower nginx
+services:
+  redis:
+    build:
+      context: ./images/redis/Dockerfile
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - ${DATA_PATH_HOST}/redis:/data 
+    networks:
+      - flask-celery
+
+  mongo:
+    build:
+      context: ./images/mongo/Dockerfile
+      args:
+       - MONGO_TAG=${MONGO_TAG}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_USERNAME: ${MONGO_INITDB_USERNAME}
+      MONGO_INITDB_PASSWORD: ${MONGO_INITDB_PASSWORD}
+      MONGO_INITDB_DATABASE : ${MONGO_INITDB_DATABASE}
+    ports:
+      - "${MONGODB_PORT}:27017"
+    volumes:
+      - ${DATA_PATH_HOST}/mongo:/data/db
+    networks:
+      - flask-celery
+
+  flask-app:
+    build: 
+      context: ./images
+      dockerfile: ./flask-app/Dockerfile
+      args:
+        - PYTHON_VERSION=${PYTHON_VERSION}
+        - PROJECT_NAME=${PROJECT_NAME}
+        - PIP_REGISTRY=${PIP_REGISTRY}
+    volumes:
+      - ./:/home/pyflask/py_projects/${PROJECT_NAME}
+      - ${PYTHON_FLASK_GUNICORN_CONFIGFILE}:/home/pyflask/gunicorn.conf.py
+      - ${PYTHON_FLASK_GUNICORN_LOG_PATH}:/home/pyflask/logs
+    networks:
+      - flask-celery
+
+  # 实现异步消息队列
+  celery:
+    build:
+      context: ./images
+      dockerfile: ./celery/Dockerfile
+      args:
+        - PYTHON_VERSION=${PYTHON_VERSION}
+        - PROJECT_NAME=${PROJECT_NAME}
+        - PIP_REGISTRY=${PIP_REGISTRY}
+    volumes:
+      - ./:/home/pyflask/py_projects/${PROJECT_NAME}
+    depends_on:
+      - redis
+      - mongo
+    networks:
+      - flask-celery
+
+  ## 监控管理celery 
+  flower:
+    build:
+      context: ./images
+      dockerfile: ./celery-flower/Dockerfile
+      args:
+        - PYTHON_VERSION=${PYTHON_VERSION}
+        - PROJECT_NAME=${PROJECT_NAME}
+        - PIP_REGISTRY=${PIP_REGISTRY}
+    volumes:
+      - ./:/home/pyflask/py_projects/${PROJECT_NAME}
+    ports:
+      - "${CELERY_FLOWER_PORT}:5555"
+    depends_on:
+      - celery
+    networks:
+      - flask-celery
+
+  nginx:
+    build: 
+      context: ./images/nginx
+    volumes:
+      - ./images/nginx/nginx.conf:/etc/nginx/nginx.conf 
+      - ${NGINX_HOST_LOG_PATH}:/var/log/nginx
+      - ${NGINX_SITES_PATH}:/etc/nginx/sites-available
+    ports:
+      - "${NGINX_HOST_HTTP_PORT}:80"
+      - "${NGINX_HOST_HTTPS_PORT}:443"
+    depends_on:
+      - flask-app
+    networks:
+      - flask-celery
+
+networks:
+  flask-celery:
+    driver: bridge
